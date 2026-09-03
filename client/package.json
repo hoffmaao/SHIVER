@@ -8,7 +8,9 @@
     "dev": "vite",
     "build": "vite-ssg build",
     "preview": "vite preview",
-    "deploy": "gh-pages -d dist -r https://github.com/ben-davison/SHIVER.git"
+    "deploy": "gh-pages -d dist -r https://github.com/ben-davison/SHIVER.git",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@geoman-io/leaflet-geoman-free": "^2.19.2",
@@ -24,6 +26,7 @@
     "html2canvas": "^1.4.1",
     "jszip": "^3.10.1",
     "leaflet": "^1.9.4",
+    "numcodecs": "^0.3.2",
     "pinia": "^3.0.4",
     "plotly.js-dist-min": "^3.3.1",
     "proj4": "^2.20.4",
@@ -33,13 +36,15 @@
     "vue": "^3.5.24",
     "vue-gtag": "^3.6.3",
     "vue-router": "^4.6.4",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "zarrita": "^0.7.5"
   },
   "devDependencies": {
     "@unhead/vue": "^3.4.0",
     "@vitejs/plugin-vue": "^6.0.1",
     "vite": "^7.2.4",
     "vite-plugin-sitemap": "^0.8.2",
-    "vite-ssg": "^28.3.0"
+    "vite-ssg": "^28.3.0",
+    "vitest": "^4.1.11"
   }
 }

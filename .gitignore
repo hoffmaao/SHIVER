@@ -84,7 +84,7 @@ dev_server.py
 create_dev_user.py
 .env.development
 .env.production
-tests/
+/tests/
 requirements.txt
 data/
 server/alembic/

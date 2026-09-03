@@ -34,7 +34,15 @@ export default defineConfig({
       dynamicRoutes: shiverRoutes
     })
   ],
+  worker: {
+    // The timeseries extraction worker is bundled separately, and Vite runs
+    // the main plugin list over that bundle too. The sitemap plugin writes
+    // into dist/ from closeBundle, which has not been created yet at that
+    // point, so the worker bundle gets an empty plugin list of its own.
+    format: 'es',
+    plugins: () => []
+  },
   ssr: {
-    noExternal: ['file-saver', '@unhead/vue', 'unhead'] 
+    noExternal: ['file-saver', '@unhead/vue', 'unhead']
   }
 })

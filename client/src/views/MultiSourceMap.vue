@@ -1081,6 +1081,13 @@ const plotlyLib = ref(null)
 // --- API CONFIGURATION ---
 import apiClient, { API_URL } from '../api';
 
+// --- TIMESERIES EXTRACTION ---
+// Point timeseries are extracted in the browser, straight from the Zarr stores
+// on Source Cooperative, so the backend VM is not in the path for the most
+// common operation on this page. requestTimeseries falls back to the API on
+// its own if that cannot be done, and returns the identical payload either way.
+import { requestTimeseries, releaseTimeseriesWorker } from '../utils/timeseriesClient';
+
 // --- PROJ4 SETUP ---
 import proj4 from 'proj4';
 //window.proj4 = proj4; // Crucial: proj4leaflet expects proj4 to be globally available in Vite!
@@ -1319,7 +1326,7 @@ const onMapMouseMove = (e) => {
 
   // 2. Create a new object (Copy + Update)
   // This breaks the reference to the old object. 
-  // Vue Production cannot ignore this—it sees a completely new piece of data.
+  // Vue Production cannot ignore thisï¿½it sees a completely new piece of data.
   const updatedPoint = {
       ...selectedPoints.value[index], // Copy existing properties (color, name, etc.)
       lat: newLat,
@@ -1433,6 +1440,10 @@ onMounted(() => {
 
 onUnmounted(() => {
   cleanupTriggers(); // Good practice to clean up when the component is destroyed
+
+  // The extraction worker holds a cache of Zarr chunks that can run to a few
+  // hundred megabytes, so it is retired along with the page that needed it.
+  releaseTimeseriesWorker();
 });
 
 
@@ -1978,7 +1989,7 @@ const restoreDefaults = () => {
     pendingSmoothingParams.value = { ...DEFAULTS.smoothing };
     pendingBuffer.value = DEFAULTS.buffer;
     
-    // Functionally identical to 'selectAllSources' – grab all available 
+    // Functionally identical to 'selectAllSources' ï¿½ grab all available 
     // sources for the currently viewed region and re-check all their boxes.
     if (availableSources.value) {
         pendingSources.value = [...availableSources.value];
@@ -2436,58 +2447,58 @@ const refetchAllPoints = async () => {
   });
 
   try {
-    // 3. Create ONE Payload for ALL points
-    const payload = {
-      roi: roiList, 
+    // 3. Create ONE set of settings for ALL points
+    const extractSettings = {
       buffer: useBuffer,
       variable: useVariable,
+      sources: useSources,
       gap_fill: useSmoothing.gap,
       win_raw: useSmoothing.win_raw,
       win_daily: useSmoothing.win_daily,
       poly: useSmoothing.poly
     };
-	
-	// Auth header injection
-	const token = typeof window !== 'undefined' ? sessionStorage.getItem('shiver_token') : null;
-    const config = {};
-    if (token) {
-        config.headers = { Authorization: `Bearer ${token}` };
-    }
 
-    // 4. Set payload extras
-	payload.sources = useSources;
-	payload.variable = useVariable; 
-	
-      // 5. Single Batch Request
-      const response = await apiClient.post('/api/timeseries/multi/json', payload);
-      const responseData = response.data;
+    // 4. Map a payload back onto the points, in the order they were requested.
+    const applyResults = (responseData) => {
+        // If responseData is an Array:
+        const resultsArray = Array.isArray(responseData)
+            ? responseData
+            : Object.values(responseData); // Convert object values to array to guarantee order
 
-    // 5. Map Response back to Points
-    // If responseData is an Array:
-    const resultsArray = Array.isArray(responseData) 
-        ? responseData 
-        : Object.values(responseData); // Convert object values to array to guarantee order
+        selectedPoints.value.forEach((point, index) => {
+            // Get the data corresponding to this point's position in the list
+            const newData = resultsArray[index];
 
-    selectedPoints.value.forEach((point, index) => {
-        // Get the data corresponding to this point's position in the list
-        const newData = resultsArray[index];
+            if (newData) {
+                // A. Update Raw Data
+                point.data = newData;
 
-        if (newData) {
-            // A. Update Raw Data
-            point.data = newData;
-            
-            // B. UPDATE SETTINGS (Deep Copy)
-            // Detach this point's settings from the UI state completely
-            point.settings = JSON.parse(JSON.stringify(newSettings));
-            
-            // Sync top-level convenience prop
-            point.buffer = newSettings.buffer;
-            
-            console.log(`Successfully updated point ${index + 1}`);
-        } else {
-            console.warn(`No data returned for point at index ${index} (ID: ${point.id})`);
+                // B. UPDATE SETTINGS (Deep Copy)
+                // Detach this point's settings from the UI state completely
+                point.settings = JSON.parse(JSON.stringify(newSettings));
+
+                // Sync top-level convenience prop
+                point.buffer = newSettings.buffer;
+            } else {
+                console.warn(`No data returned for point at index ${index} (ID: ${point.id})`);
+            }
+        });
+    };
+
+    // 5. Single Batch Request. As with a single point, the velocities are
+    // plotted first and the uncertainties are folded in when they arrive.
+    const { results } = await requestTimeseries(roiList, extractSettings, {
+        onPartial: (partial) => {
+            applyResults(partial);
+            statusMessage.value = "Loading uncertainties...";
+            updateChart();
+        },
+        onProgress: ({ completed, total, stage }) => {
+            if (stage === 'velocity') statusMessage.value = `Updating point ${completed} of ${total}...`;
         }
     });
+
+    applyResults(results);
 
     statusMessage.value = "All points updated.";
     updateChart();
@@ -2897,45 +2908,54 @@ const fetchSinglePoint = async (id, lat, lon, color, customSettings = null) => {
 	  lon: lon
 	});
   
-  // Ping the backend
+  // Extract the timeseries
   try {
-    const payload = { 
-        roi: [[lat, lon]], 
+    const extractSettings = {
         buffer: settings.buffer,
-        variable: settings.variable, 
+        variable: settings.variable,
         gap_fill: settings.smoothing.gap,
         win_raw: settings.smoothing.win_raw,
         win_daily: settings.smoothing.win_daily,
         poly: settings.smoothing.poly,
 		sources: settings.sources
     };
-	
-	// 2. Prepare Headers (CORRECT WAY)
-	const token = typeof window !== 'undefined' ? sessionStorage.getItem('shiver_token') : null;
-	const config = { headers: {} };
-	if (token) config.headers['Authorization'] = `Bearer ${token}`; 
-  
-	// Request 
-    const response = await apiClient.post('/api/timeseries/multi/json', payload, config);
-    const rawData = response.data;
-    const firstKey = Object.keys(rawData)[0];
-    const siteData = rawData[firstKey];
-	
-	// Check for ping errors
-    if (siteData.status === 'error') {
-      statusMessage.value = `Error: ${siteData.message}`; return;
+
+	// 2. Store whichever payload we have so far against this point.
+	// We store 'settings' inside the point. This freezes the configuration
+	// for this specific point until the user explicitly changes it.
+	const applyResults = (rawData) => {
+		const firstKey = Object.keys(rawData)[0];
+		const siteData = rawData[firstKey];
+		if (!siteData || siteData.status === 'error') return siteData;
+
+		const newPoint = { id, lat, lon, color, settings: settings, buffer: settings.buffer, data: siteData, name: firstKey };
+
+		const idx = selectedPoints.value.findIndex(p => p.id === id);
+		if (idx >= 0) selectedPoints.value[idx] = newPoint;
+		else selectedPoints.value.push(newPoint);
+
+		return siteData;
+	};
+
+	// 3. Request. Velocities and their uncertainties live in separate Zarr
+	// chunks, so the chart is drawn from the velocities as soon as they land
+	// and the error bars are added when the second chunk finishes.
+    const { results } = await requestTimeseries([[lat, lon]], extractSettings, {
+		onPartial: (partial) => {
+			if (applyResults(partial)?.status === 'success') {
+				statusMessage.value = "Loading uncertainties...";
+				updateChart();
+			}
+		}
+	});
+
+    const siteData = applyResults(results);
+
+	// Check for extraction errors
+    if (!siteData || siteData.status === 'error') {
+      statusMessage.value = `Error: ${siteData?.message || 'No data returned.'}`; return;
     }
-	
-	// Save the snapshot
-    // We store 'settings' inside the point. This freezes the configuration 
-    // for this specific point until the user explicitly changes it.
-    const newPoint = { id, lat, lon, color, settings: settings, buffer: settings.buffer, data: siteData, name: firstKey };
-	
-	// Record
-    const idx = selectedPoints.value.findIndex(p => p.id === id);
-    if (idx >= 0) selectedPoints.value[idx] = newPoint;
-    else selectedPoints.value.push(newPoint);
-	
+
 	// Show status
     statusMessage.value = "Loaded.";
     updateChart();

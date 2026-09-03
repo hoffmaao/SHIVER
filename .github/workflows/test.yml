@@ -1,14 +1,15 @@
-name: Deploy Vue to GitHub Pages
+name: Test client
 
+# The timeseries extraction now runs in the browser, so its numerical
+# behaviour is only guarded by these tests. They run on every push and pull
+# request, and the deploy workflow waits for them before publishing.
 on:
   push:
     branches: [main]
-
-permissions:
-  contents: write
+  pull_request:
 
 jobs:
-  build-and-deploy:
+  test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -24,9 +25,10 @@ jobs:
           cd client
           npm install
 
-      # The client-side timeseries extraction has no server to fall back on for
-      # correctness, so nothing is published unless its tests pass.
-      - name: Test
+      # These run entirely offline against recorded fixtures, so a Source
+      # Cooperative or backend outage cannot turn the build red. The live
+      # parity tests are opt-in via SHIVER_LIVE_TESTS=1.
+      - name: Unit and parity tests
         run: |
           cd client
           npm test
@@ -37,9 +39,3 @@ jobs:
         run: |
           cd client
           npm run build
-
-      - name: Deploy to gh-pages branch
-        uses: JamesIves/github-pages-deploy-action@v4
-        with:
-          folder: client/dist
-          branch: gh-pages
